@@ -7,10 +7,10 @@
 # Load modules
 import pathlib
 import pandas as pd
+import argparse
 
 # Local imports
 import avaframe.in3Utils.initializeProject as initProj
-from avaframe.com1DFA import com1DFA
 from avaframe.in3Utils import cfgUtils, cfgHandling
 from avaframe.in3Utils import logUtils
 from avaframe.in3Utils import generateTopo
@@ -20,13 +20,28 @@ from avaframe.runScripts.runAna3AIMEC import runAna3AIMEC
 from avaframe.ana3AIMEC import ana3AIMEC
 
 
+
 # +++++++++SETUP CONFIGURATION++++++++++++++++++++++++
 # choose test case - options: IdealizedTopo, RealTopo, CoulombOnly
-testCase = 'RealTopo'
-runComputationalModule = True
-comMod = 'com1DFA'
-aimecDir = ''
+
+parser = argparse.ArgumentParser(
+                    prog = 'runISeeSnowTest.py',
+                    description = 'Run script for performing ISeeSnow test case',
+                )
+parser.add_argument('--testCase', type = str, help = 'Select the test case [IdealizedTopo, RealTopo, CoulombOnly]', default = 'RealTopo')
+parser.add_argument('--comMod', type = str, help = 'Select the backend. Should be available as a module.', default = 'com1DFA')
+parser.add_argument('--runAimec', type = bool, help = 'Postprocess simulation results with AIMEC')
+
+
+args = parser.parse_args()
+
+testCase = args.testCase
+comMod = args.comMod
+
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+runComputationalModule = True
+aimecDir = ''
 
 # Load avalanche directory from general configuration file
 dirPath = pathlib.Path(__file__).parents[0]
@@ -66,27 +81,32 @@ frictFile = dirPath / 'frictionParameterValues.csv'
 frictionParameters = pd.read_csv(frictFile, header=0)
 log.info('Fetched input data, dem: %s, release area: %s' % (demFile.stem, releaseFile.stem))
 
+
 # ++++++++++CALL TO COMPUTATIONAL MODULE++++++++++++++
-# HERE YOU COULD CALL YOUR MODULE
 if runComputationalModule:
-    if comMod == 'com1DFA':
-        #++++++++++ Perform simulation with com1DFA module
-        # get the configuration of com1DFA using overrides
-        cfgCom1DFA = cfgUtils.getModuleConfig(com1DFA, fileOverride='', modInfo=False, toPrint=False, onlyDefault=True)
-        cfgCom1DFA, cfgMain = cfgHandling.applyCfgOverride(cfgCom1DFA, cfgMain, com1DFA, addModValues=False)
-        # call com1DFA and perform simulations
-        dem, plotDict, reportDictList, simDF = com1DFA.com1DFAMain(cfgMain, cfgInfo=cfgCom1DFA)
-        #+++++++++++++++++++++++++++++++++++++++++++++++
+    try: 
+        model = __import__(comMod)
+    except ImportError as ierr:
+        log.error('ComMod: %s import error: %s - consider implementing it.' % (comMod, ierr.what))
+    
+    mu = cfgMain._sections['com1DFA_override']['muvoellmy']
+    xi = cfgMain._sections['com1DFA_override']['xsivoellmy']
+    h0 = cfgMain._sections['com1DFA_override']['relTh']
+
+    if cfgMain._sections['com1DFA_override']['relThFromShp'] == 'False':
+        dem, plotDict, reportDictList, simDF = model.run(cfgMain, mu, xi, demFile, releaseFields)
     else:
-        log.error('ComMod: %s not available - consider implementing it :)' % comMod)
+        dem, plotDict, reportDictList, simDF = model.run(cfgMain, mu, xi, demFile, releaseFiles, h0)
+
 
 #++++++++++ Perform result analysis (based on aimec)+++++++++++++++++++++++
 # OUTPUTS need to be located at aimecDir (if provided) or if aimecDir= '' files need to be located in avalancheDir/Outputs/comMod/peakFiles
 # get the configuration of aimec using overrides
-cfgAimec = cfgUtils.getModuleConfig(ana3AIMEC, fileOverride='', modInfo=False, toPrint=False, onlyDefault=True)
-cfgAimec, cfgMain = cfgHandling.applyCfgOverride(cfgAimec, cfgMain, ana3AIMEC, addModValues=False)
-# set anaMod 
-cfgAimec['AIMECSETUP']['anaMod'] = comMod
-runAna3AIMEC(avalancheDir, cfgAimec, inputDir=aimecDir)
-log.info('Result analysis using ana3AIMEC performed')
-log.info('ISeeSnow testcase: %s completed' % (testCase))
+if args.runAimec:
+    cfgAimec = cfgUtils.getModuleConfig(ana3AIMEC, fileOverride='', modInfo=False, toPrint=False, onlyDefault=True)
+    cfgAimec, cfgMain = cfgHandling.applyCfgOverride(cfgAimec, cfgMain, ana3AIMEC, addModValues=False)
+    # set anaMod 
+    cfgAimec['AIMECSETUP']['anaMod'] = comMod
+    runAna3AIMEC(avalancheDir, cfgAimec, inputDir=aimecDir)
+    log.info('Result analysis using ana3AIMEC performed')
+    log.info('ISeeSnow testcase: %s completed' % (testCase))
